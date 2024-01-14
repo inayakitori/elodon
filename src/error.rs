@@ -1,8 +1,7 @@
 use std::fmt::{Display, Formatter};
 use std::ops::{Deref, DerefMut};
-use sqlx::Error;
+
 use thiserror::Error;
-use crate::structs::{FromId, User};
 
 #[derive(Error, Debug)]
 pub enum ElodonError{

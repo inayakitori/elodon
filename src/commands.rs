@@ -1,37 +1,27 @@
-use std::fmt::{Display, Formatter};
-use std::ops::Deref;
-use std::str::FromStr;
-use std::sync::OnceLock;
-use poise::{async_trait, ChoiceParameter, CommandParameterChoice, create_slash_argument, FrameworkError, PartialContext, SlashArgError, SlashArgument};
-use poise::serenity_prelude::{ArgumentConvert, CacheHttp, ChannelId, CommandInteraction, CommandOptionType, CreateCommandOption, GuildId, ResolvedValue};
-use lazy_static::lazy_static;
-use poise::futures_util::future::err;
-use sqlx::{Executor, FromRow, query, SqliteConnection, Connection};
-use sqlx::sqlite::{SqliteError, SqliteQueryResult};
-use crate::{Context, Error};
-use crate::error::{ElodonError, ElodonErrorList};
-use crate::structs::{Level, Play, Song, FromId, User, ChartId, Genre, Chart};
+use sqlx::{Connection, SqliteConnection};
+
+use crate::error::ElodonError;
 
 macro_rules! return_err {
     ($err:expr) => {
-        return Err(Box::new($err));
+        return Err(Box::new($err))
     };
 }
 
 macro_rules! ok_or_say_error {
     ($ctx: ident, $search: expr) => {
         match $search.await {
-        Ok(value) => {
-            value
-        },
-        Err(err @ ElodonError::NoResults {..}) => {
-            $ctx.say(err).await?;
-            return Ok(());
-        },
-        Err(err) => {
-            return_err!(err)
+            Ok(value) => {
+                value
+            },
+            Err(err @ ElodonError::NoResults {..}) => {
+                $ctx.say(err).await?;
+                return Ok(());
+            },
+            Err(err) => {
+                return_err!(err)
+            }
         }
-    };
     };
 }
 
@@ -132,7 +122,7 @@ pub async fn scores(
 
     let song: Song = ok_or_say_error!(ctx, Song::from_id(&mut conn, song_id));
     let chart_id = ChartId(song_id, level);
-    let chart: Chart = ok_or_say_error!(ctx, Chart::from_id(&mut conn, chart_id));
+    let _chart: Chart = ok_or_say_error!(ctx, Chart::from_id(&mut conn, chart_id));
     let mut plays: Vec<Play> = ok_or_say_error!(ctx, chart_id.plays(&mut conn));
 
     response.push_str(&*format!("### Results for {} ({:?}):\n```\n", song, level));

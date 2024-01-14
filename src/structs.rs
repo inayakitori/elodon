@@ -1,11 +1,9 @@
 use std::fmt::{Display, Formatter};
-use std::ops::Deref;
-use std::str::FromStr;
-use poise::ChoiceParameter;
-use sqlx::{Connection, Error, FromRow, Row, SqliteConnection};
-use sqlx::encode::IsNull::No;
-use crate::error::ElodonError;
 
+use poise::ChoiceParameter;
+use sqlx::{Error, FromRow, Row, SqliteConnection};
+
+use crate::error::ElodonError;
 
 macro_rules! map_no_rows {
     ($result: ident : Vec[$return_type:literal], $id: expr) => {

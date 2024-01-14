@@ -1,24 +1,20 @@
 #![warn(clippy::str_to_string)]
 #![feature(async_closure)]
 
-mod commands;
-mod structs;
-mod error;
-
-use poise::serenity_prelude as serenity;
 use std::{
-    collections::HashMap,
     env::var,
-    sync::{Arc, Mutex},
+    sync::Arc,
     time::Duration,
 };
 use std::sync::OnceLock;
-use poise::futures_util::future::err;
-use sqlx::{SqliteConnection,Connection};
-use tokio::runtime::Handle;
-use tokio::task;
-use crate::error::ElodonError;
-use crate::structs::{Song};
+
+use poise::serenity_prelude as serenity;
+
+use crate::structs::Song;
+
+mod commands;
+mod structs;
+mod error;
 
 static SONG_NAMES: OnceLock<Vec<Song>> = OnceLock::new();
 
