@@ -38,7 +38,7 @@ async fn on_error(error: poise::FrameworkError<'_, Data, Error>) {
         poise::FrameworkError::Setup { error, .. } => panic!("Failed to start bot: {:?}", error),
         poise::FrameworkError::Command { error, ctx, .. } => {
             println!("Error in command `{}`: {:?}", ctx.command().name, error,);
-            ctx.say(format!("{error}")).await;
+            ctx.say(format!("Error in command:\n{error}")).await;
         },
         error => {
             if let Err(e) = poise::builtins::on_error(error).await {
@@ -54,17 +54,10 @@ async fn on_error(error: poise::FrameworkError<'_, Data, Error>) {
 async fn main() {
     env_logger::init();
 
-
-    let mut conn = SqliteConnection::connect("./res/taiko.db").await.unwrap();
-    let rows: Vec<(u32, String, String)> = sqlx::query_as("SELECT song_id, song_name_jap, song_name_eng from SONGS")
-        .fetch_all(&mut conn)
-        .await.unwrap();
-
-
     // FrameworkOptions contains all of poise's configuration option in one struct
     // Every option can be omitted to use its default value
     let options = poise::FrameworkOptions {
-        commands: vec![commands::help(), commands::song(), commands::find_song(), commands::scoreboard()],
+        commands: vec![commands::help(), commands::song(), commands::song_info(), commands::scores()],
         prefix_options: poise::PrefixFrameworkOptions {
             prefix: None,
             edit_tracker: Some(Arc::new(poise::EditTracker::for_timespan(
@@ -114,7 +107,6 @@ async fn main() {
     let framework = poise::Framework::builder()
         .setup(move |ctx, _ready, framework| {
             Box::pin(async move {
-                let mut conn = SqliteConnection::connect("./res/taiko.db").await.unwrap();
                 println!("Logged in as {}", _ready.user.name);
                 poise::builtins::register_globally(ctx, &framework.options().commands).await?;
                 Ok(Data {

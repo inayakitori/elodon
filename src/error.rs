@@ -1,20 +1,30 @@
 use std::fmt::{Display, Formatter};
 use std::ops::{Deref, DerefMut};
+use sqlx::Error;
 use thiserror::Error;
-use crate::structs::User;
+use crate::structs::{FromId, User};
 
 #[derive(Error, Debug)]
 pub enum ElodonError{
-    #[error("There was an issue with finding the entry for {search} = {id}. More info: {sql_error}")]
-    WrongId{
-        sql_error: sqlx::Error,
+    #[error("There were no results found for {search} = {id}. Either the {search} doesn't/don't exist or elodon hasn't unlocked it/them")]
+    NoResults {
         search: String,
-        id: i64
+        id: String
     },
+    #[error("Level_ids are from 1 - 5. Level id given was {0} which doesn't correspond to a level")]
+    WrongLevelId(u32),
+    #[error("Genre_ids are from 1 - 9. Genre id given was {0} which doesn't correspond to a level")]
+    WrongGenreId(u32),
     #[error(transparent)]
     List(#[from] ElodonErrorList),
     #[error("Failed to connect to database. More info: {0}")]
     DatabaseError(#[from] sqlx::Error)
+}
+
+impl From<ElodonError> for String {
+    fn from(value: ElodonError) -> Self {
+        format!("{}", value) //NOT AN ERROR. rustrover just dumb
+    }
 }
 
 #[derive(Error, Debug)]

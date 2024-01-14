@@ -10,7 +10,30 @@ use sqlx::{Executor, FromRow, query, SqliteConnection, Connection};
 use sqlx::sqlite::{SqliteError, SqliteQueryResult};
 use crate::{Context, Error};
 use crate::error::{ElodonError, ElodonErrorList};
-use crate::structs::{Level, Play, Song, FromId, User};
+use crate::structs::{Level, Play, Song, FromId, User, ChartId, Genre, Chart};
+
+macro_rules! return_err {
+    ($err:expr) => {
+        return Err(Box::new($err));
+    };
+}
+
+macro_rules! ok_or_say_error {
+    ($ctx: ident, $search: expr) => {
+        match $search.await {
+        Ok(value) => {
+            value
+        },
+        Err(err @ ElodonError::NoResults {..}) => {
+            $ctx.say(err).await?;
+            return Ok(());
+        },
+        Err(err) => {
+            return_err!(err)
+        }
+    };
+    };
+}
 
 /// Show this help menu
 #[poise::command(track_edits, slash_command)]
@@ -35,124 +58,113 @@ pub async fn help(
 
 /// See info for song by id
 #[poise::command(slash_command)]
-pub async fn song(
+pub async fn song_info(
     ctx: Context<'_>,
     #[description = "Song id"] song_id: u32,
 ) -> Result<(), Error> {
 
-    let mut conn = get_connection().await.unwrap();
-    let song: Result<Song, _> = sqlx::query_as("SELECT song_id, song_name_eng, song_name_jap FROM songs WHERE song_id=?")
+    let mut conn = get_connection().await?;
+    let song: Song = match sqlx::query_as("SELECT song_id, song_name_eng, song_name_jap, genre_id FROM songs WHERE song_id=?")
         .bind(song_id)
-        .fetch_one(&mut conn).await;
+        .fetch_one(&mut conn)
+        .await {
+            Err(err) => { return_err!(err) }
+            Ok(song) => { song }
+        };
 
-    match song {
-        Err(err) => {
-            Err(Box::new(err))
-        }
-        Ok(song) => {
-            let response = format!("song #{}: {} / {}", song.id, song.name_eng, song.name_jap);
-            ctx.say(response).await?;
-            Ok(())
-        }
-    }
+    let response = format!("#{}: {}", song.id, song.get_name()?);
+    ctx.say(response).await?;
+    Ok(())
+
 }
 
 ///search songs to find the id
 #[poise::command(slash_command)]
-pub async fn find_song(
+pub async fn song(
     ctx: Context<'_>,
-    #[description="search keyword"] fragment: String
+    #[description="search keyphrase"] search: String,
+    #[description="genre "] genre: Option<Genre>
 ) -> Result<(), Error> {
 
-    let wrapped_fragment = format!("%{fragment}%");
-
     let mut conn = get_connection().await?;
-    let song: Result<Vec<Song>, _> = sqlx::query_as(
-        "SELECT song_id, song_name_eng, song_name_jap FROM songs WHERE song_name_eng like ?\
-         UNION \
-         SELECT song_id, song_name_eng, song_name_jap FROM songs WHERE song_name_jap like ?"
-    ).bind(wrapped_fragment.clone()).bind(wrapped_fragment)
-        .fetch_all(&mut conn).await;
+    let songs: Vec<Song> = ok_or_say_error!(
+        ctx,
+        Song::get_matching(&mut conn, &search, genre)
+    );
 
-    match song {
-        Err(err) => {
-            Err(Box::new(err))
-        }
-        Ok(songs) => {
-            let mut response: String = String::new();
-            response.push_str(&*format!("### Results for {fragment}\n"));
-            for song in songs {
-                response.push_str(&*format!("song #{}: {} / {}\n", song.id, song.name_eng, song.name_jap));
+    let mut warnings = ElodonErrorList::new();
+    let mut response: String = String::new();
+    match genre {
+        Some(genre) => response.push_str(&*format!("### Results for \"{search}\" in {genre}:\n```\n")),
+        None => response.push_str(&*format!("### Results for \"{search}\":\n```\n"))
+    };
+
+    for song in songs {
+        let name = match song.get_name() {
+            Ok(name) => { name },
+            Err(err) => {
+                warnings.push(err);
+                "???".to_string()
             }
+        };
+        response.push_str(&*format!("#{:<5}: {}\n", song.id, name));
+    }
+    response.push_str("```");
+    ctx.say(response).await?;
 
-            ctx.say(response.strip_suffix("\n").unwrap()).await?;
-            Ok(())
-        }
+    if !warnings.is_empty() {
+        return_err!(ElodonError::List(warnings))
+    } else {
+        Ok(())
     }
 }
 
 ///get scoreboard of chart via song id and difficulty
 #[poise::command(slash_command)]
-pub async fn scoreboard(
+pub async fn scores(
     ctx: Context<'_>,
-    #[description="song id. find via /find_song"] song_id: u32,
+    #[description="song id. find via /song"] song_id: u32,
     #[description="difficulty"] level: Level,
 ) -> Result<(), Error> {
-    let mut warnings : ElodonErrorList = ElodonErrorList::new();
-
+    let mut response = String::new();
+    let mut warnings = ElodonErrorList::new();
     let mut conn = get_connection().await?;
-    let plays: Result<Vec<Play>, _> = sqlx::query_as(
-        "SELECT user_id, song_id, level_id, score FROM top_plays WHERE song_id=? AND level_id=?"
-    ).bind(song_id).bind::<u32>(level.into())
-        .fetch_all(&mut conn).await;
 
-    let song: Song = match Song::from_id(&mut conn, song_id).await {
-        Ok(song) => {
-            song
-        },
-        Err(err) => {
-            warnings.push(err);
-            Song::placeholder()
-        }
-    };
+    let song: Song = ok_or_say_error!(ctx, Song::from_id(&mut conn, song_id));
+    let chart_id = ChartId(song_id, level);
+    let chart: Chart = ok_or_say_error!(ctx, Chart::from_id(&mut conn, chart_id));
+    let mut plays: Vec<Play> = ok_or_say_error!(ctx, chart_id.plays(&mut conn));
+
+    response.push_str(&*format!("### Results for {} ({:?}):\n```\n", song, level));
 
 
-    match plays {
-        Err(err) => {
-            warnings.push(ElodonError::DatabaseError(err));
-        }
-        Ok(mut plays) => {
-            plays.sort_by_key(|play| -(play.score as i32));
-            let mut response = String::new();
+    plays.sort_by_key(|play| -(play.score as i32));
 
-            response.push_str(&*format!("### Results for {} / {} ({:?}):\n```\n", song.name_eng, song.name_jap, level));
-            for (i, play) in plays.iter().enumerate() {
-                let ranking = format!("#{}", i+1);
-                let potential_user: Result<User, ElodonError> = play.get_user(&mut conn).await;
-                let user = match potential_user {
-                    Ok(user) => {user},
-                    Err(err) => {
-                        warnings.push(err);
-                        User::placeholder()
-                    }
-                };
-                response.push_str(&*format!("{:>3}) {:>7} by {}\n", ranking, play.score, user.name));
+    for (i, play) in plays.iter().enumerate() {
+        let ranking = format!("#{}", i + 1);
+        response.push_str(&*format!("{:>3}) {:>7} by ", ranking, play.score));
+        match play.get_user(&mut conn).await {
+            Ok(user) => {
+                response.push_str(&*format!("{}\n" ,user.name));
+            },
+            Err(err) => {
+                warnings.push(err);
+                response.push_str("[User not found: {}]\n");
             }
-            response.strip_suffix("\n").unwrap();
-            response.push_str("```");
-            ctx.say(response).await?;
-        }
+        };
     }
 
-    if warnings.is_empty() {
-        Ok(())
+    response.push_str("```");
+    ctx.say(response).await?;
+
+
+    if !warnings.is_empty() {
+        return_err!(ElodonError::List(warnings))
     } else {
-        Err(Box::new(ElodonError::List(warnings)))
+        Ok(())
     }
-
 }
 
-
 async fn get_connection() -> Result<SqliteConnection, ElodonError>{
-    Ok(SqliteConnection::connect("./res/taiko.db").await?)
+    Ok(SqliteConnection::connect("./../taiko.db").await?)
 }
