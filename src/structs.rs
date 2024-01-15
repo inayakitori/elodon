@@ -1,42 +1,17 @@
+use std::default::Default;
 use std::fmt::{Display, Formatter};
+use std::num::NonZeroU64;
+use num_enum::{IntoPrimitive, TryFromPrimitive};
 
 use poise::ChoiceParameter;
-use sqlx::{Error, FromRow, Row, SqliteConnection};
+use poise::serenity_prelude::UserId;
+use sqlx::{Connection, Error, FromRow, Row, SqliteConnection};
+
+use paste::paste;
 
 use crate::error::ElodonError;
-
-macro_rules! map_no_rows {
-    ($result: ident : Vec[$return_type:literal], $id: expr) => {
-        match $result {
-            Ok(list) => {
-                if list.is_empty(){
-                    return Err(ElodonError::NoResults {
-                        search: format!("{}s", $return_type),
-                        id: $id.to_string(),
-                    });
-                } else {
-                    return Ok(list);
-                }
-            },
-            Err(Error::RowNotFound) => Err(ElodonError::NoResults {
-                    search: stringify!($return_type).to_string(),
-                    id: $id.to_string(),
-                }),
-            Err(err) => {Err(ElodonError::DatabaseError(err))}
-        }
-    };
-    ($result: ident : $return_type:literal, $id: expr) => {
-        $result.map_err(|err| {
-            match err {
-                Error::RowNotFound => ElodonError::NoResults {
-                    search: stringify!($return_type).to_string(),
-                    id: $id.to_string(),
-                },
-                _ => {ElodonError::DatabaseError(err)}
-            }
-        })
-    };
-}
+use crate::filters::*;
+use crate::map_no_rows;
 
 // USER
 
@@ -44,21 +19,29 @@ macro_rules! map_no_rows {
 pub struct User{
     #[sqlx(rename = "user_id")]
     pub id: i64,
+    #[sqlx(rename = "discord_id")]
+    pub discord: i64,
     #[sqlx(rename = "user_name")]
     pub name: String,
     pub elo1: f32,
     pub elo2: f32,
     pub elo3: f32,
-    pub elo4: f32
+    pub elo4: f32,
 }
 
-impl FromId<i64> for User {
-    async fn from_id(conn: &mut SqliteConnection, id: i64) -> Result<Self, ElodonError> {
-        let user: Result<User, Error> = sqlx::query_as(
-            "SELECT user_id, user_name, elo1, elo2, elo3, elo4 FROM users WHERE user_id=?"
-        ).bind(id)
-            .fetch_one(conn).await;
-        map_no_rows!(user: "user", id)
+impl User {
+    pub fn discord_id(&self) -> UserId{
+        return UserId::new(self.discord as u64)
+    }
+}
+
+impl FetchAll<Play> for User{}
+
+impl From<User> for GeneralFilter{
+    fn from(value: User) -> Self {
+        GeneralFilter::new()
+            .user_id(Some(value.id))
+            .discord_id(Some(value.discord_id()))
     }
 }
 
@@ -77,14 +60,14 @@ pub struct Song{
 }
 
 impl Song {
-    pub fn get_name<'a>(&self) -> Result<String, ElodonError> {
-        let genre: Genre = self.genre.try_into()?;
+    pub fn get_name<'a>(&self) -> String {
+        let genre: Genre = self.genre.try_into().unwrap();
         if self.name_eng == "" { //if no eng name, use japanese name
-            Ok(self.name_jap.clone())
+            self.name_jap.clone()
         } else if self.name_eng == self.name_jap { //if names same only show one
-            Ok(self.name_eng.clone())
+            self.name_eng.clone()
         } else { //if names different show both
-            Ok(format!("{} > {} | {}", genre, self.name_eng, self.name_jap))
+            format!("{} | {}", self.name_eng, self.name_jap)
         }
     }
 
@@ -110,49 +93,46 @@ impl Song {
         map_no_rows!(songs: Vec["song"], fragment)
     }
 
-    pub fn genre(&self) -> Result<Genre, ElodonError> {
-        return Genre::try_from(self.genre)
+    pub fn genre(&self) -> Genre {
+        return Genre::try_from(self.genre).unwrap();
     }
 
 }
 
 impl Display for Song {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        let name = self.get_name().map_err(|_| std::fmt::Error)?;
-        write!(f, "{} (#{})", name,  self.id)
+        write!(f, "{} (#{})", self.get_name(),  self.id)
     }
 }
 
-impl FromId<u32> for Song {
-    async fn from_id(conn: &mut SqliteConnection, id: u32) -> Result<Self, ElodonError> {
-        let song: Result<Song, _> = sqlx::query_as(
-            "SELECT song_id, song_name_eng, song_name_jap, genre_id FROM songs WHERE song_id = ?"
-        ).bind(id)
-            .fetch_one(conn).await;
-        map_no_rows!(song: "song", id)
+impl FetchAll<Chart> for Song{}
+impl FetchAll<Play> for Song{}
+
+impl From<Song> for GeneralFilter{
+    fn from(value: Song) -> Self {
+        GeneralFilter::new()
+            .song_id(Some(value.id))
+            .genre(Some(value.genre()))
     }
 }
+
 
 // LEVEL
 
-#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, ChoiceParameter)]
+#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, ChoiceParameter, TryFromPrimitive, IntoPrimitive)]
+#[num_enum(error_type(name = ElodonError, constructor = ElodonError::WrongLevelId))]
+#[repr(u32)]
 pub enum Level{
-    Easy,
-    Medium,
-    Hard,
-    Oni,
-    Ura
+    Easy = 1,
+    Medium = 2,
+    Hard = 3,
+    Oni = 4,
+    Ura = 5,
 }
 
 impl Level {
     pub fn id(&self) -> u32{
-        match self {
-            crate::structs::Level::Easy => 1,
-            crate::structs::Level::Medium => 2,
-            crate::structs::Level::Hard => 3,
-            crate::structs::Level::Oni => 4,
-            crate::structs::Level::Ura => 5
-        }
+        (*self).into()
     }
 }
 
@@ -162,55 +142,27 @@ impl Display for Level {
     }
 }
 
-impl From<Level> for u32 {
-    fn from(value: crate::structs::Level) -> Self {
-        value.id()
-    }
-}
-
-impl TryFrom<u32> for Level {
-    type Error = ElodonError;
-
-    fn try_from(value: u32) -> Result<Self, Self::Error> {
-        match value {
-            1 => {Ok(crate::structs::Level::Easy)},
-            2 => {Ok(crate::structs::Level::Medium)},
-            3 => {Ok(crate::structs::Level::Hard)},
-            4 => {Ok(crate::structs::Level::Oni)},
-            5 => {Ok(crate::structs::Level::Ura)},
-            i => {Err(ElodonError::WrongLevelId(i))}
-        }
-    }
-}
-
 // GENRE
 
-#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, ChoiceParameter)]
+#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, ChoiceParameter, TryFromPrimitive, IntoPrimitive)]
+#[num_enum(error_type(name = ElodonError, constructor = ElodonError::WrongGenreId))]
+#[repr(u32)]
 pub enum Genre{
-    Pop,
-    Anime,
-    Kids,
-    Vocaloid,
+    Pop = 1,
+    Anime = 2,
+    Kids = 3,
+    Vocaloid = 4,
     #[name = "Game Music"]
-    GameMusic,
+    GameMusic = 5,
     #[name = "Namco Original"]
-    NamcoOriginal,
-    Variety,
-    Classical,
+    NamcoOriginal = 6,
+    Variety = 7,
+    Classical = 8,
 }
 
 impl Genre {
     pub fn id(&self) -> u32{
-        match self {
-            Genre::Pop => 1,
-            Genre::Anime => 2,
-            Genre::Kids => 3,
-            Genre::Vocaloid => 4,
-            Genre::GameMusic => 5,
-            Genre::NamcoOriginal => 6,
-            Genre::Variety => 7,
-            Genre::Classical => 8
-        }
+        (*self).into()
     }
 }
 
@@ -220,33 +172,9 @@ impl Display for Genre {
     }
 }
 
-impl From<Genre> for u32 {
-    fn from(value: Genre) -> Self {
-        value.id()
-    }
-}
-
-impl TryFrom<u32> for Genre {
-    type Error = ElodonError;
-
-    fn try_from(value: u32) -> Result<Self, Self::Error> {
-        match value {
-            1 => Ok(Genre::Pop),
-            2 => Ok(Genre::Anime),
-            3 => Ok(Genre::Kids),
-            4 => Ok(Genre::Vocaloid),
-            5 => Ok(Genre::GameMusic),
-            6 => Ok(Genre::NamcoOriginal),
-            7 => Ok(Genre::Variety),
-            8 => Ok(Genre::Classical),
-            i => {Err(ElodonError::WrongGenreId(i))}
-        }
-    }
-}
-
 // CHART
 
-#[derive(FromRow)]
+#[derive(Copy, Clone, FromRow)]
 pub struct Chart {
     #[sqlx(rename = "song_id")]
     pub id: u32,
@@ -257,15 +185,26 @@ pub struct Chart {
     pub certainty: f32,
 }
 
-impl FromId<ChartId> for Chart {
-    async fn from_id(conn: &mut SqliteConnection, id: ChartId) -> Result<Self, ElodonError> {
-        let chart: Result<Chart, _> = sqlx::query_as(
-            "SELECT song_id, level_id, score_slope, score_miyabi, certainty FROM charts WHERE song_id = ? AND level_id = ?"
-        ).bind(id.0)
-            .bind(id.1.id())
-            .fetch_one(conn).await;
+impl Chart {
+    pub fn id(&self) -> ChartId {
+        ChartId(self.id, self.level.try_into().unwrap())
+    }
+    pub fn level(&self) -> Level {
+        Level::try_from(self.level).unwrap()
+    }
+    pub async fn full_name(&self, conn: &mut SqliteConnection) -> Result<String, ElodonError> {
+        let song = self.fetch_one_other::<Song>(conn).await?;
+        Ok(format!("{} ({})", song.get_name(), self.level()))
+    }
+}
+impl FetchOne<Song> for Chart{}
+impl FetchAll<Play> for Chart{}
 
-        map_no_rows!(chart: "chart", id)
+impl From<Chart> for GeneralFilter{
+    fn from(chart: Chart) -> Self {
+        GeneralFilter::new()
+            .song_id(Some(chart.id))
+            .level(Some(chart.level()))
     }
 }
 
@@ -273,16 +212,6 @@ impl FromId<ChartId> for Chart {
 pub struct ChartId(pub u32, pub Level);
 
 impl ChartId {
-
-    pub async fn plays (&self, conn: &mut SqliteConnection) -> Result<Vec<Play>, ElodonError> {
-        let plays = sqlx::query_as(
-            "SELECT user_id, song_id, level_id, score FROM top_plays WHERE song_id=? AND level_id=?"
-        ).bind(self.0).bind(self.1.id())
-            .fetch_all(conn).await;
-
-        map_no_rows!(plays: Vec["play"], self)
-    }
-
     pub fn song_id(&self) -> u32 {
         return self.0;
     }
@@ -299,7 +228,7 @@ impl Display for ChartId {
 
 // PLAY
 
-#[derive(FromRow)]
+#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, FromRow)]
 pub struct Play{
     #[sqlx(rename = "user_id")]
     pub user: i64,
@@ -311,17 +240,23 @@ pub struct Play{
 }
 
 impl Play{
-    pub async fn get_user(&self, conn: &mut SqliteConnection) -> Result<User, ElodonError> {
-        User::from_id(conn, self.user).await
-    }
-    pub async fn get_song(&self, conn: &mut SqliteConnection) -> Result<Song, ElodonError> {
-        Song::from_id(conn, self.song).await
-    }
-    pub fn get_level(&self) -> Level {
-        self.level.try_into().expect("level id was not valid")
+
+}
+
+impl FetchOne<User> for Play{}
+impl FetchOne<Song> for Play{}
+impl FetchOne<Chart> for Play{}
+
+impl From<Play> for GeneralFilter{
+    fn from(play: Play) -> Self {
+        GeneralFilter::new()
+            .user_id(Some(play.user))
+            .song_id(Some(play.song))
+            .level(Some(play.level.try_into().unwrap()))
     }
 }
 
-pub trait FromId<T> : Sized{
-    async fn from_id(conn: &mut SqliteConnection, id: T) -> Result<Self, ElodonError>;
-}
+
+
+
+

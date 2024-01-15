@@ -1,6 +1,16 @@
+use crate::Data;
+use poise::builtins::create_application_commands;
+use futures::Stream;
+use futures::StreamExt;
+use poise::serenity_prelude::{GuildId, UserId};
 use sqlx::{Connection, SqliteConnection};
 
-use crate::error::ElodonError;
+use crate::error::{ElodonError, ElodonErrorList};
+use crate::filters::*;
+use crate::Error;
+use crate::Context;
+use crate::structs::*;
+use crate::paginate::paginate;
 
 macro_rules! return_err {
     ($err:expr) => {
@@ -23,6 +33,15 @@ macro_rules! ok_or_say_error {
             }
         }
     };
+}
+
+async fn autocomplete_song<'a>(
+    ctx: Context<'a>,
+    partial: &'a str,
+) -> impl Stream<Item = String> + 'a {
+    futures::stream::iter(&ctx.data().songs_autocomplete[..])
+        .filter(move |name| futures::future::ready(name.to_ascii_lowercase().contains(partial)))
+        .map(|name| name.to_string())
 }
 
 /// Show this help menu
@@ -62,7 +81,7 @@ pub async fn song_info(
             Ok(song) => { song }
         };
 
-    let response = format!("#{}: {}", song.id, song.get_name()?);
+    let response = format!("#{}: {}", song.id, song.get_name());
     ctx.say(response).await?;
     Ok(())
 
@@ -90,14 +109,7 @@ pub async fn song(
     };
 
     for song in songs {
-        let name = match song.get_name() {
-            Ok(name) => { name },
-            Err(err) => {
-                warnings.push(err);
-                "???".to_string()
-            }
-        };
-        response.push_str(&*format!("#{:<5}: {}\n", song.id, name));
+        response.push_str(&*format!("#{:<5}: {} > {}\n", song.id, song.genre(), song.get_name()));
     }
     response.push_str("```");
     ctx.say(response).await?;
@@ -113,27 +125,44 @@ pub async fn song(
 #[poise::command(slash_command)]
 pub async fn scores(
     ctx: Context<'_>,
-    #[description="song id. find via /song"] song_id: u32,
-    #[description="difficulty"] level: Level,
+    #[autocomplete = "autocomplete_song"]
+    #[description="song"]
+    song: String,
+    #[description="difficulty"]
+    level: Level,
 ) -> Result<(), Error> {
     let mut response = String::new();
     let mut warnings = ElodonErrorList::new();
     let mut conn = get_connection().await?;
 
-    let song: Song = ok_or_say_error!(ctx, Song::from_id(&mut conn, song_id));
-    let chart_id = ChartId(song_id, level);
-    let _chart: Chart = ok_or_say_error!(ctx, Chart::from_id(&mut conn, chart_id));
-    let mut plays: Vec<Play> = ok_or_say_error!(ctx, chart_id.plays(&mut conn));
+    let song_id: u32 = song.split(":")
+        .next().ok_or(ElodonError::ParseError(songs))?
+        .parse().map_err(ElodonError::ParseError(songs))?;
+
+    let mut filter = GeneralFilter::new()
+        .song_id(Some(song_id))
+        .level(Some(level));
+
+    let song = ok_or_say_error!(ctx,
+        Song::fetch_one(&mut conn, filter)
+    );
+    let chart: Chart = ok_or_say_error!(ctx,
+        Chart::fetch_one(&mut conn, filter)
+    );
+    let mut plays: Vec<Play> = ok_or_say_error!(ctx,
+        Play::fetch_all(&mut conn, filter)
+    );
+
+    let info_filter = filter.user_id(None).discord_id(None);
 
     response.push_str(&*format!("### Results for {} ({:?}):\n```\n", song, level));
-
 
     plays.sort_by_key(|play| -(play.score as i32));
 
     for (i, play) in plays.iter().enumerate() {
         let ranking = format!("#{}", i + 1);
         response.push_str(&*format!("{:>3}) {:>7} by ", ranking, play.score));
-        match play.get_user(&mut conn).await {
+        match play.fetch_one_other::<User>(&mut conn).await {
             Ok(user) => {
                 response.push_str(&*format!("{}\n" ,user.name));
             },
@@ -155,6 +184,67 @@ pub async fn scores(
     }
 }
 
-async fn get_connection() -> Result<SqliteConnection, ElodonError>{
+///get a player via discord id
+#[poise::command(track_edits, slash_command)]
+pub async fn player(
+    ctx: Context<'_>,
+    #[description="discord"] discord_user: UserId,
+    level: Option<Level>,
+    genre: Option<Genre>,
+) -> Result<(), Error> {
+
+    ctx.defer().await?;
+
+    let mut conn = get_connection().await?;
+    let mut filter = GeneralFilter::new()
+        .discord_id(Some(discord_user.clone()))
+        .level(level)
+        .genre(genre);
+
+    let user: User = ok_or_say_error!(ctx,
+        User::fetch_one(&mut conn, filter)
+    );
+    filter.set_user_id(Some(user.id));
+    let songs: Vec<Song> = ok_or_say_error!(ctx,
+        Song::fetch_all(&mut conn, filter)
+    );
+    let mut plays: Vec<Play> = ok_or_say_error!(ctx,
+        Play::fetch_all(&mut conn, filter)
+    );
+
+    let info_filter = filter.discord_id(None).user_id(None);
+
+    let discord_user = discord_user.to_user(ctx).await?;
+    let mut pages_owned: Vec<String> = vec![];
+    let page_count = 1 + (plays.len() / 10);
+    for (i, plays) in plays.chunks(10).enumerate(){
+        let mut response = String::new();
+        response.push_str(&*format!("### Plays for user @{} with {}, {}/{}:\n\n",
+                                    discord_user.name, info_filter, i+1, page_count));
+        for play in plays {
+            let chart = ok_or_say_error!(ctx, play.fetch_one_other::<Chart>(&mut conn));
+            let chart_name = ok_or_say_error!(ctx, chart.full_name(&mut conn));
+            response.push_str(&*format!("{:>7} on {}\n", play.score, chart_name));
+        }
+        pages_owned.push(response)
+    }
+
+    let pages: Vec<&str> = pages_owned.iter().map(|s| &**s).collect();
+    paginate::<Data, Error>(ctx, &pages).await;
+
+    Ok(())
+}
+
+///DEV USE. refreshed slash commands
+#[poise::command(prefix_command)]
+pub async fn dev_register(
+    ctx: Context<'_>
+) -> Result<(), Error> {
+    poise::builtins::register_application_commands_buttons(ctx).await?;
+    Ok(())
+}
+
+
+pub(crate) async fn get_connection() -> Result<SqliteConnection, ElodonError>{
     Ok(SqliteConnection::connect("./../taiko.db").await?)
 }

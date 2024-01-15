@@ -6,10 +6,13 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-poise= "0.6.1"
+poise = "0.6.1"
 tokio = { version = "1.35.1" , features = ["rt-multi-thread", "sync"]}
 env_logger = "0.10.1"
 lazy_static = { version = "1.4.0", features = [] }
 sqlx = { version = "0.7.3", features = ["runtime-tokio", "sqlite"] }
 async-once-cell = "0.5.3"
 thiserror = { version = "1.0.56" }
+paste = "1.0.14"
+num_enum = "0.7.2"
+futures = "0.3.30"

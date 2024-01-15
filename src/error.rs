@@ -5,19 +5,21 @@ use thiserror::Error;
 
 #[derive(Error, Debug)]
 pub enum ElodonError{
-    #[error("There were no results found for {search} = {id}. Either the {search} doesn't/don't exist or elodon hasn't unlocked it/them")]
+    #[error("There were no results found in {search} where {id}. Either those {search} don't exist or elodon hasn't unlocked them")]
     NoResults {
         search: String,
         id: String
     },
     #[error("Level_ids are from 1 - 5. Level id given was {0} which doesn't correspond to a level")]
     WrongLevelId(u32),
+    #[error("could not extract level id from {0}")]
+    ParseError(String),
     #[error("Genre_ids are from 1 - 9. Genre id given was {0} which doesn't correspond to a level")]
     WrongGenreId(u32),
     #[error(transparent)]
     List(#[from] ElodonErrorList),
     #[error("Failed to connect to database. More info: {0}")]
-    DatabaseError(#[from] sqlx::Error)
+    DatabaseError(#[from] sqlx::Error),
 }
 
 impl From<ElodonError> for String {
