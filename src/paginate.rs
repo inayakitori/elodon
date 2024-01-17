@@ -7,6 +7,7 @@ use crate::{Context, Error};
 
 pub async fn paginate<U, E>(
     ctx: Context<'_>,
+    header: &str,
     pages: &[&str],
 ) -> Result<(), serenity::Error> {
     // Define some unique identifiers for the navigation buttons
@@ -22,6 +23,7 @@ pub async fn paginate<U, E>(
         ]);
 
         poise::CreateReply::default()
+            .content(header)
             .embed(serenity::CreateEmbed::default().description(pages[0]))
             .components(vec![components])
     };
@@ -59,6 +61,7 @@ pub async fn paginate<U, E>(
                 ctx.serenity_context(),
                 serenity::CreateInteractionResponse::UpdateMessage(
                     serenity::CreateInteractionResponseMessage::new()
+                        .content(header)
                         .embed(serenity::CreateEmbed::new().description(pages[current_page])),
                 ),
             )

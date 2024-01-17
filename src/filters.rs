@@ -7,6 +7,7 @@ use std::fmt::{Display, Formatter};
 
 use paste::paste;
 use poise::futures_util::stream::iter;
+use poise::ChoiceParameter;
 
 #[macro_export]
 macro_rules! map_no_rows {
@@ -43,7 +44,12 @@ macro_rules! map_no_rows {
 }
 
 macro_rules! create_search_filter {
-($filter:ident, $($field:ident: $field_type:ty => $column_name:literal = $to_column:expr),+) => {
+($filter:ident,
+    $($field:ident: $field_type:ty =>
+        ($query_format_string:literal, $($query_values:expr),*),
+        ($display_format_string:literal, $($display_values:expr),*)
+    ),+
+) => {
 paste!{
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Default)]
 pub struct $filter {
@@ -62,14 +68,14 @@ impl $filter {
         let mut response = String::new();
         $(
         if let Some($field) = self.$field {
-            let processed_field = $to_column;
-            response.push_str(&*format!("{} = {} and ", $column_name, processed_field))
+            let processed_query = format!($query_format_string, $($query_values),+);
+            response.push_str(&*format!("{} AND ", processed_query))
         }
         )*
         if response == ""{
             None
         } else {
-            Some(response.strip_suffix(" and ").unwrap().to_string())
+            Some(response.strip_suffix(" AND ").unwrap().to_string())
         }
     }
 
@@ -94,7 +100,8 @@ impl Display for $filter {
         let mut response = " where ".to_string();
         $(
         if let Some($field) = self.$field {
-            response.push_str(&*format!("{} is {} and ", $column_name, $field))
+            let processed_query = format!($display_format_string, $($display_values),*);
+            response.push_str(&*format!("{} and ", processed_query))
         }
         )*
         write!(f, "{}",
@@ -108,12 +115,20 @@ impl Display for $filter {
 }
 }};}
 macro_rules! create_search_filter_with_query_commands {
-($row:ident $filter: ident $table_name:literal $columns: literal, $($field:ident: $field_type:ty => $column_name:literal = $to_column:expr),+) => {
+($row:ident $filter: ident $table_name:literal $columns: literal,
+    $($field:ident: $field_type:ty =>
+        ($query_format_string:literal, $($query_values:expr),*),
+        ($display_format_string:literal, $($display_values:expr),*)
+    ),+
+) => {
 paste!{
 
 create_search_filter!(
     $filter,
-    $($field: $field_type => $column_name = $to_column),*
+        $($field: $field_type =>
+            ($query_format_string,$($query_values),*),
+            ($display_format_string,$($display_values),*)
+        ),*
 );
 
 impl $filter{
@@ -206,34 +221,71 @@ pub trait FetchAll<R: Filterable>: Into<GeneralFilter> {
 
 create_search_filter! (
     GeneralFilter,
-    user_id: i64 => "user_id" = user_id,
-    discord_id: UserId => "discord_id" = discord_id.get(),
-    song_id: u32 => "song_id" = song_id,
-    level: Level => "level_id" = level.id(),
-    genre: Genre => "genre_id" = genre.id()
+    user_id: i64 =>
+        ("user_id = {}", user_id),
+        ("[user ids hidden]",),
+    discord_id: UserId  =>
+        ("discord_id = {}", discord_id.get()),
+        ("discord <@{}>", discord_id.get()),
+    song_id: u32 =>
+        ("song_id = {}", song_id),
+        ("song_id is {}", song_id),
+    level: Level =>
+        ("level_id = {}", level.id()),
+        ("level_id is {}", level.id()),
+    display_level: DisplayLevel =>
+        ("level_id BETWEEN {} AND {}", display_level.min_value(), display_level.max_value()),
+        ("level is {}", display_level.name()),
+    genre: Genre =>
+        ("genre_id = {}", genre.id()),
+        ("genre is {}", genre.name())
 );
 
 create_search_filter_with_query_commands!(
     User UserFilter "users" "user_id, discord_id, user_name, elo1, elo2, elo3, elo4",
-    user_id: i64 => "user_id" = user_id,
-    discord_id: UserId => "discord_id" = discord_id.get()
+    user_id: i64 =>
+        ("user_id = {}", user_id),
+        ("[user ids hidden]",),
+    discord_id: UserId  =>
+        ("discord_id = {}", discord_id.get()),
+        ("discord <@{}>", discord_id.get())
 );
 
 create_search_filter_with_query_commands!(
     Song SongFilter "songs" "song_id, song_name_eng, song_name_jap, genre_id",
-    song_id: u32 => "song_id" = song_id,
-    genre: Genre => "genre_id" = genre.id()
+    song_id: u32 =>
+        ("song_id = {}", song_id),
+        ("song_id is {}", song_id),
+    genre: Genre =>
+        ("genre_id = {}", genre.id()),
+        ("genre is {}", genre.name())
 );
 
 create_search_filter_with_query_commands!(
     Chart ChartFilter "charts" "song_id, level_id, score_slope, score_miyabi, certainty",
-    song_id: u32 => "song_id" = song_id,
-    level: Level => "level_id" = level.id()
+    song_id: u32 =>
+        ("song_id = {}", song_id),
+        ("song_id is {}", song_id),
+    level: Level =>
+        ("level_id = {}", level.id()),
+        ("level_id is {}", level.id()),
+    display_level: DisplayLevel =>
+        ("level_id BETWEEN {} AND {}", display_level.min_value(), display_level.max_value()),
+        ("level is {}", display_level.name())
 );
 
 create_search_filter_with_query_commands!(
     Play PlayFilter "top_plays" "user_id, song_id, level_id, score",
-    user_id: i64 => "user_id" = user_id,
-    song_id: u32 => "song_id" = song_id,
-    level: Level => "level_id" = level.id()
+    user_id: i64 =>
+        ("user_id = {}", user_id),
+        ("[user ids hidden]",),
+    song_id: u32 =>
+        ("song_id = {}", song_id),
+        ("song_id is {}", song_id),
+    level: Level =>
+        ("level_id = {}", level.id()),
+        ("level_id is {}", level.id()),
+    display_level: DisplayLevel =>
+        ("level_id BETWEEN {} AND {}", display_level.min_value(), display_level.max_value()),
+        ("level is {}", display_level.name())
 );

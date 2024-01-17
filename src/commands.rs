@@ -1,7 +1,8 @@
-use crate::Data;
+use crate::{Data, elo};
 use poise::builtins::create_application_commands;
 use futures::Stream;
 use futures::StreamExt;
+use noisy_float::types::{R32, r32};
 use poise::serenity_prelude::{GuildId, UserId};
 use sqlx::{Connection, SqliteConnection};
 
@@ -136,8 +137,8 @@ pub async fn scores(
     let mut conn = get_connection().await?;
 
     let song_id: u32 = song.split(":")
-        .next().ok_or(ElodonError::ParseError(songs))?
-        .parse().map_err(ElodonError::ParseError(songs))?;
+        .next().ok_or(ElodonError::ParseError(song.clone()))?
+        .parse().map_err(|_| ElodonError::ParseError(song.clone()))?;
 
     let mut filter = GeneralFilter::new()
         .song_id(Some(song_id))
@@ -189,7 +190,7 @@ pub async fn scores(
 pub async fn player(
     ctx: Context<'_>,
     #[description="discord"] discord_user: UserId,
-    level: Option<Level>,
+    level: Option<DisplayLevel>,
     genre: Option<Genre>,
 ) -> Result<(), Error> {
 
@@ -198,7 +199,7 @@ pub async fn player(
     let mut conn = get_connection().await?;
     let mut filter = GeneralFilter::new()
         .discord_id(Some(discord_user.clone()))
-        .level(level)
+        .display_level(level)
         .genre(genre);
 
     let user: User = ok_or_say_error!(ctx,
@@ -208,19 +209,50 @@ pub async fn player(
     let songs: Vec<Song> = ok_or_say_error!(ctx,
         Song::fetch_all(&mut conn, filter)
     );
-    let mut plays: Vec<Play> = ok_or_say_error!(ctx,
+    let plays: Vec<Play> = ok_or_say_error!(ctx,
         Play::fetch_all(&mut conn, filter)
     );
+    let discord_user = discord_user.to_user(ctx).await?;
 
     let info_filter = filter.discord_id(None).user_id(None);
 
-    let discord_user = discord_user.to_user(ctx).await?;
+    let mut header: String = format!("## User @{}, showing plays{}\n### Most notable plays:\n",
+                                       discord_user.name, info_filter);
+
+    let mut ranked_plays: Vec<(R32, &Play, Genre, String)> = vec![];
+    for play in &plays {
+        if let Some(ranked_play) = get_play_info(&mut conn, user.elo(play.level()), &play).await {
+            match level {
+                Some(level) if (level != ranked_play.1.level().into()) => continue,
+                _ => {}
+            }
+            match genre {
+                Some(genre) if (genre != ranked_play.2) => continue,
+                _ => {}
+            }
+            ranked_plays.push(ranked_play);
+        }
+    }
+    ranked_plays.sort_by_key(|(z,_,_,_)| *z * r32(-1f32));
+
+    if ranked_plays.is_empty() {
+        header.push_str("No plays found. Player has no ELO");
+    } else {
+        header.push_str("```\n");
+        for (z, play, genre, chart_name) in ranked_plays.iter().take(5) {
+            let z_value: f32 = z.raw();
+            header.push_str(&*format!("{:+.2}. {:>7} on {}\n", z_value, play.score, chart_name));
+        }
+        header.push_str("```");
+    }
+
+
     let mut pages_owned: Vec<String> = vec![];
     let page_count = 1 + (plays.len() / 10);
     for (i, plays) in plays.chunks(10).enumerate(){
         let mut response = String::new();
-        response.push_str(&*format!("### Plays for user @{} with {}, {}/{}:\n\n",
-                                    discord_user.name, info_filter, i+1, page_count));
+        response.push_str(&*format!("### Plays for user <@{}>. {}/{}:\n\n",
+                                    discord_user.id, i+1, page_count));
         for play in plays {
             let chart = ok_or_say_error!(ctx, play.fetch_one_other::<Chart>(&mut conn));
             let chart_name = ok_or_say_error!(ctx, chart.full_name(&mut conn));
@@ -230,9 +262,18 @@ pub async fn player(
     }
 
     let pages: Vec<&str> = pages_owned.iter().map(|s| &**s).collect();
-    paginate::<Data, Error>(ctx, &pages).await;
+    paginate::<Data, Error>(ctx, &header, &pages).await;
 
     Ok(())
+}
+
+async fn get_play_info<'a>(conn: &mut SqliteConnection, elo: Option<f32>, play: &'a Play) -> Option<(R32, &'a Play, Genre, String)>{
+    let chart = play.fetch_one_other::<Chart>(conn).await.ok()?;
+    let song = play.fetch_one_other::<Song>(conn).await.ok()?;
+    let chart_name = chart.full_name(conn).await.ok()?;
+    let genre = song.genre();
+    let z_value = R32::try_new(elo::get_z_value(play.score, elo, chart)?)?;
+    Some((z_value, &play, song.genre(), chart_name))
 }
 
 ///DEV USE. refreshed slash commands

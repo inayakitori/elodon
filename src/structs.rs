@@ -23,16 +23,27 @@ pub struct User{
     pub discord: i64,
     #[sqlx(rename = "user_name")]
     pub name: String,
-    pub elo1: f32,
-    pub elo2: f32,
-    pub elo3: f32,
-    pub elo4: f32,
+    pub elo1: Option<f32>,
+    pub elo2: Option<f32>,
+    pub elo3: Option<f32>,
+    pub elo4: Option<f32>,
 }
 
 impl User {
     pub fn discord_id(&self) -> UserId{
         return UserId::new(self.discord as u64)
     }
+
+    pub fn elo(&self, level: Level) -> Option<f32>{
+        return match level{
+            Level::Easy   => self.elo1,
+            Level::Med => self.elo2,
+            Level::Hard   => self.elo3,
+            Level::Oni    => self.elo4,
+            Level::Ura    => self.elo4,
+        }
+    }
+
 }
 
 impl FetchAll<Play> for User{}
@@ -124,7 +135,7 @@ impl From<Song> for GeneralFilter{
 #[repr(u32)]
 pub enum Level{
     Easy = 1,
-    Medium = 2,
+    Med = 2,
     Hard = 3,
     Oni = 4,
     Ura = 5,
@@ -139,6 +150,45 @@ impl Level {
 impl Display for Level {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.name())
+    }
+}
+
+#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, ChoiceParameter)]
+pub enum DisplayLevel{
+    Easy,
+    Med,
+    Hard,
+    #[name = "Oni+"]
+    OniPlus,
+}
+
+impl DisplayLevel{
+    pub fn min_value(&self) -> u32 {
+        match &self {
+            DisplayLevel::Easy => 1,
+            DisplayLevel::Med => 2,
+            DisplayLevel::Hard => 3,
+            DisplayLevel::OniPlus => 4,
+        }
+    }
+    pub fn max_value(&self) -> u32 {
+        match &self {
+            DisplayLevel::Easy => 1,
+            DisplayLevel::Med => 2,
+            DisplayLevel::Hard => 3,
+            DisplayLevel::OniPlus => 5,
+        }
+    }
+}
+impl From<Level> for DisplayLevel {
+    fn from(value: Level) -> Self {
+        match value {
+            Level::Easy => DisplayLevel::Easy,
+            Level::Med => DisplayLevel::Med,
+            Level::Hard => DisplayLevel::Hard,
+            Level::Oni => DisplayLevel::OniPlus,
+            Level::Ura => DisplayLevel::OniPlus
+        }
     }
 }
 
@@ -180,9 +230,9 @@ pub struct Chart {
     pub id: u32,
     #[sqlx(rename = "level_id")]
     pub level: u32,
-    pub score_slope: i32,
-    pub score_miyabi: i32,
-    pub certainty: f32,
+    pub score_slope: Option<i32>,
+    pub score_miyabi: Option<i32>,
+    pub certainty: Option<f32>,
 }
 
 impl Chart {
@@ -240,7 +290,9 @@ pub struct Play{
 }
 
 impl Play{
-
+    pub fn level(&self) -> Level {
+        Level::try_from(self.level).unwrap()
+    }
 }
 
 impl FetchOne<User> for Play{}

@@ -22,6 +22,7 @@ mod structs;
 mod error;
 mod filters;
 mod paginate;
+mod elo;
 
 static SONG_NAMES: OnceLock<Vec<Song>> = OnceLock::new();
 
