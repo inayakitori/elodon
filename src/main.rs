@@ -23,6 +23,7 @@ mod error;
 mod filters;
 mod paginate;
 mod elo;
+mod emoji;
 
 static SONG_NAMES: OnceLock<Vec<Song>> = OnceLock::new();
 

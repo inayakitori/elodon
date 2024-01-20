@@ -2,8 +2,10 @@ use futures::{Stream, StreamExt};
 use std::fmt::Write as _;
 
 use poise::serenity_prelude as serenity;
+use poise::serenity_prelude::{ButtonStyle, EmojiId, ReactionType};
 
-use crate::{Context, Error};
+use crate::{Context, emoji, Error};
+
 
 pub async fn paginate<U, E>(
     ctx: Context<'_>,
@@ -18,8 +20,12 @@ pub async fn paginate<U, E>(
     // Send the embed with the first page as content
     let reply = {
         let components = serenity::CreateActionRow::Buttons(vec![
-            serenity::CreateButton::new(&prev_button_id).emoji('◀'),
-            serenity::CreateButton::new(&next_button_id).emoji('▶'),
+            serenity::CreateButton::new(&prev_button_id)
+                .style(ButtonStyle::Primary)
+                .emoji(emoji::LEFT),
+            serenity::CreateButton::new(&next_button_id)
+                .style(ButtonStyle::Primary)
+                .emoji(emoji::RIGHT),
         ]);
 
         poise::CreateReply::default()
@@ -28,7 +34,7 @@ pub async fn paginate<U, E>(
             .components(vec![components])
     };
 
-    ctx.send(reply).await?;
+    let _reply_handle = ctx.send(reply).await?;
 
     // Loop through incoming interactions with the navigation buttons
     let mut current_page = 0;
@@ -42,16 +48,15 @@ pub async fn paginate<U, E>(
     {
         if *ctx.author() == press.user {
             // Depending on which button was pressed, go to next or previous page
-            if press.data.custom_id == next_button_id {
-                current_page += 1;
-                if current_page >= pages.len() {
-                    current_page = 0;
-                }
-            } else if press.data.custom_id == prev_button_id {
-                current_page = current_page.checked_sub(1).unwrap_or(pages.len() - 1);
-            } else {
-                // This is an unrelated button interaction
-                continue;
+            let id = &press.data.custom_id;
+            match id {
+                _ if id == &next_button_id => {
+                    current_page = (current_page + 1) % pages.len();
+                },
+                _ if id == &prev_button_id  => {
+                    current_page = current_page.checked_sub(1).unwrap_or(pages.len() - 1);
+                },
+                _ => {}
             }
         }
 

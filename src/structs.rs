@@ -295,6 +295,7 @@ impl Play{
     }
 }
 
+
 impl FetchOne<User> for Play{}
 impl FetchOne<Song> for Play{}
 impl FetchOne<Chart> for Play{}
@@ -309,6 +310,13 @@ impl From<Play> for GeneralFilter{
 }
 
 
+//an easy way to just store all the data in a play
+pub struct DetailedPlay{
+    play: Play,
+    chart: Chart,
+    song: Song,
+    user: User,
+}
 
 
 
