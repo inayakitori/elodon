@@ -19,19 +19,31 @@ pub async fn paginate<U, E>(
 
     // Send the embed with the first page as content
     let reply = {
-        let components = serenity::CreateActionRow::Buttons(vec![
-            serenity::CreateButton::new(&prev_button_id)
-                .style(ButtonStyle::Primary)
-                .emoji(emoji::LEFT),
-            serenity::CreateButton::new(&next_button_id)
-                .style(ButtonStyle::Primary)
-                .emoji(emoji::RIGHT),
-        ]);
 
-        poise::CreateReply::default()
-            .content(header)
-            .embed(serenity::CreateEmbed::default().description(pages[0]))
-            .components(vec![components])
+        let mut reply = poise::CreateReply::default()
+            .content(header);
+
+        if pages.len() > 1 {
+            let components = serenity::CreateActionRow::Buttons(
+                vec![
+                    serenity::CreateButton::new(&prev_button_id)
+                        .style(ButtonStyle::Primary)
+                        .emoji(emoji::LEFT),
+                    serenity::CreateButton::new(&next_button_id)
+                        .style(ButtonStyle::Primary)
+                        .emoji(emoji::RIGHT),
+                ]
+            );
+            reply = reply.components(vec![components]);
+        }
+
+        if pages.len() > 0 {
+            reply = reply.embed(serenity::CreateEmbed::default().description(pages[0]));
+        } else {
+            reply.content.as_mut().unwrap().push_str("\n No results :c");
+        }
+
+        reply
     };
 
     let _reply_handle = ctx.send(reply).await?;

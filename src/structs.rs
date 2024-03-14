@@ -1,6 +1,7 @@
 use std::default::Default;
 use std::fmt::{Display, Formatter};
 use std::num::NonZeroU64;
+use itertools::Itertools;
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 
 use poise::ChoiceParameter;
@@ -8,10 +9,33 @@ use poise::serenity_prelude::UserId;
 use sqlx::{Connection, Error, FromRow, Row, SqliteConnection};
 
 use paste::paste;
+use crate::emoji::{CROWN_IDS, RANK_IDS};
 
 use crate::error::ElodonError;
 use crate::filters::*;
 use crate::map_no_rows;
+
+pub trait ElodonDisplay{
+    fn get_display_text(&self) -> String;
+
+}
+
+pub trait ElodonDisplayList<E>{
+    fn get_display_text(&self) -> String;
+}
+
+impl<E: ElodonDisplay> ElodonDisplayList<E> for Vec<E>{
+    fn get_display_text(&self) -> String {
+        return if self.is_empty() {
+            "No results".to_string()
+        } else {
+            self.iter()
+                .map(|e| e.get_display_text())
+                .join("\n")
+                .to_string()
+        }
+    }
+}
 
 // USER
 
@@ -34,16 +58,21 @@ impl User {
         return UserId::new(self.discord as u64)
     }
 
-    pub fn elo(&self, level: Level) -> Option<f32>{
+    pub fn elo(&self, level: DisplayLevel) -> Option<f32>{
         return match level{
-            Level::Easy   => self.elo1,
-            Level::Med => self.elo2,
-            Level::Hard   => self.elo3,
-            Level::Oni    => self.elo4,
-            Level::Ura    => self.elo4,
+            DisplayLevel::Easy   => self.elo1,
+            DisplayLevel::Med => self.elo2,
+            DisplayLevel::Hard   => self.elo3,
+            DisplayLevel::OniPlus    => self.elo4,
         }
     }
 
+}
+
+impl ElodonDisplay for User{
+    fn get_display_text(&self) -> String {
+        return format!("`#{:<13}  {:<9}`<@{}>", self.id, self.name, self.discord)
+    }
 }
 
 impl FetchAll<Play> for User{}
@@ -116,6 +145,12 @@ impl Display for Song {
     }
 }
 
+impl ElodonDisplay for Song{
+    fn get_display_text(&self) -> String {
+        return format!("`#{:<4}  {} > {}`", self.id, self.genre(), self.get_name())
+    }
+}
+
 impl FetchAll<Chart> for Song{}
 impl FetchAll<Play> for Song{}
 
@@ -144,6 +179,9 @@ pub enum Level{
 impl Level {
     pub fn id(&self) -> u32{
         (*self).into()
+    }
+    pub fn decrease(&self) -> Option<Self> {
+        return Level::try_from(self.id()-1).ok();
     }
 }
 
@@ -224,7 +262,7 @@ impl Display for Genre {
 
 // CHART
 
-#[derive(Copy, Clone, FromRow)]
+#[derive(Copy, Clone, Debug, FromRow)]
 pub struct Chart {
     #[sqlx(rename = "song_id")]
     pub id: u32,
@@ -232,7 +270,8 @@ pub struct Chart {
     pub level: u32,
     pub score_slope: Option<i32>,
     pub score_miyabi: Option<i32>,
-    pub certainty: Option<f32>,
+    pub sd_mean: Option<f32>,
+    pub sd_sd: Option<f32>,
 }
 
 impl Chart {
@@ -247,6 +286,20 @@ impl Chart {
         Ok(format!("{} ({})", song.get_name(), self.level()))
     }
 }
+
+impl ElodonDisplay for Chart{
+    fn get_display_text(&self) -> String {
+
+        return format!("#{:<4}.{}:\n`Score/ELO={:>4} Miyabi ELO={:>4}\nsd= {} ({})`",
+            self.id, self.level,
+            self.score_slope.map(|i| format!("{i:>4}")).unwrap_or(" ?? ".to_string()),
+            self.score_miyabi.map(|i| format!("{i:>4}")).unwrap_or(" ?? ".to_string()),
+            self.sd_mean.map(|i|format!("{i:>7.0}")).unwrap_or("  ???  ".to_string()),
+            self.sd_sd.map(|i|format!("{i:>4.0}")).unwrap_or(" ?? ".to_string())
+        )
+    }
+}
+
 impl FetchOne<Song> for Chart{}
 impl FetchAll<Play> for Chart{}
 
@@ -287,6 +340,13 @@ pub struct Play{
     #[sqlx(rename = "level_id")]
     pub level: u32,
     pub score: u32,
+    pub rank: u32,
+    pub crown: u32,
+    pub good_cnt: u32,
+    pub ok_cnt: u32,
+    pub bad_cnt: u32,
+    pub combo_cnt: u32,
+    pub roll_cnt: u32
 }
 
 impl Play{
@@ -295,6 +355,20 @@ impl Play{
     }
 }
 
+impl ElodonDisplay for Play{
+    fn get_display_text(&self) -> String {
+        let crown_emoji = format!("<:crown_{}:{}>", self.crown, CROWN_IDS.get(self.crown as usize).expect("invalid crown id"));
+        let rank_emoji = if self.rank < 2 {String::new()} else {
+            format!("<:rank_{}:{}>", self.rank, RANK_IDS.get(self.rank as usize).expect("invalid rank id"))
+        };
+
+        format!("{:>4}.{} {:<13} {:>7} {} {}\n` {:>4} | {:>3} | {:<3} c{:<4} r{:<4}`",
+            self.song, self.level, self.score, self.user, crown_emoji, rank_emoji,
+            self.good_cnt, self.ok_cnt, self.bad_cnt, self.combo_cnt, self.level
+        )
+
+    }
+}
 
 impl FetchOne<User> for Play{}
 impl FetchOne<Song> for Play{}
@@ -309,14 +383,6 @@ impl From<Play> for GeneralFilter{
     }
 }
 
-
-//an easy way to just store all the data in a play
-pub struct DetailedPlay{
-    play: Play,
-    chart: Chart,
-    song: Song,
-    user: User,
-}
 
 
 

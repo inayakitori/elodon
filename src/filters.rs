@@ -219,6 +219,15 @@ pub trait FetchAll<R: Filterable>: Into<GeneralFilter> {
 
 //used for printing the filter. sort of a dud class
 
+
+#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, ChoiceParameter)]
+pub enum FilterType{
+    User,
+    Song,
+    Chart,
+    Play
+}
+
 create_search_filter! (
     GeneralFilter,
     user_id: i64 =>
@@ -262,7 +271,7 @@ create_search_filter_with_query_commands!(
 );
 
 create_search_filter_with_query_commands!(
-    Chart ChartFilter "charts" "song_id, level_id, score_slope, score_miyabi, certainty",
+    Chart ChartFilter "charts" "song_id, level_id, score_slope, score_miyabi, sd_mean, sd_sd",
     song_id: u32 =>
         ("song_id = {}", song_id),
         ("song_id is {}", song_id),
@@ -275,7 +284,7 @@ create_search_filter_with_query_commands!(
 );
 
 create_search_filter_with_query_commands!(
-    Play PlayFilter "top_plays" "user_id, song_id, level_id, score",
+    Play PlayFilter "top_plays" "user_id, song_id, level_id, score, good_cnt, ok_cnt, bad_cnt, combo_cnt, roll_cnt, rank, crown",
     user_id: i64 =>
         ("user_id = {}", user_id),
         ("[user ids hidden]",),

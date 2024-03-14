@@ -1,5 +1,7 @@
 #![warn(clippy::str_to_string)]
 #![feature(async_closure)]
+#![feature(const_refs_to_cell)]
+#![feature(const_trait_impl)]
 
 use crate::filters::SongFilter;
 use crate::filters::Filterable;
@@ -65,10 +67,11 @@ async fn main() {
     let options = poise::FrameworkOptions {
         commands: vec![
             commands::help(),
-            commands::song(),
+            commands::search(),
             commands::song_info(),
             commands::scores(),
             commands::player(),
+            commands::suggest()
             // commands::dev_register(),
         ],
         prefix_options: poise::PrefixFrameworkOptions {
