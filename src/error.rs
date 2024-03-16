@@ -18,8 +18,12 @@ pub enum ElodonError{
     WrongGenreId(u32),
     #[error(transparent)]
     List(#[from] ElodonErrorList),
-    #[error("Failed to connect to database. More info: {0}")]
+    #[error("Database error: {0}")]
     DatabaseError(#[from] sqlx::Error),
+    #[error("Command that required server was not run in server")]
+    NoGuild,
+    #[error("Irrecoverable error (likely bad state or manual shutdown). More info: {0}")]
+    Shutdown(#[from] std::io::Error),
 }
 
 impl From<ElodonError> for String {

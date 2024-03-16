@@ -13,9 +13,10 @@ use std::{
 use std::sync::OnceLock;
 
 use poise::serenity_prelude as serenity;
-use poise::serenity_prelude::FullEvent;
+use poise::serenity_prelude::{FullEvent, ShardManager};
 use sqlx::SqliteConnection;
 use crate::commands::get_connection;
+use crate::error::ElodonError;
 
 use crate::structs::Song;
 
@@ -45,8 +46,17 @@ async fn on_error(error: poise::FrameworkError<'_, Data, Error>) {
     match error {
         poise::FrameworkError::Setup { error, .. } => panic!("Failed to start bot: {:?}", error),
         poise::FrameworkError::Command { error, ctx, .. } => {
-            println!("Error in command `{}`: {:?}", ctx.command().name, error,);
-            ctx.say(format!("Error in command:\n{error}")).await;
+            println!("Error in command `{}`: {:?}", ctx.command().name, error);
+            ctx.say(format!("Error in command:\n{error}")).await.expect("failed to send error msg");
+            if let Ok(elodon_error) = error.downcast::<ElodonError>() {
+                match *elodon_error {
+                    ElodonError::Shutdown(error) => {
+                        ctx.say(format!("{error}")).await.expect("failed to send error msg");
+                        ctx.framework().shard_manager.shutdown_all().await;
+                    }
+                    _ => {}
+                }
+            }
         },
         error => {
             if let Err(e) = poise::builtins::on_error(error).await {
@@ -67,12 +77,12 @@ async fn main() {
     let options = poise::FrameworkOptions {
         commands: vec![
             commands::help(),
-            commands::search(),
             commands::song_info(),
             commands::scores(),
             commands::player(),
-            commands::suggest()
-            // commands::dev_register(),
+            commands::suggest(),
+            commands::dev(),
+            commands::register()
         ],
         prefix_options: poise::PrefixFrameworkOptions {
             prefix: Some("~".to_string()),
@@ -161,7 +171,10 @@ async fn main() {
     let token = var("DISCORD_TOKEN")
         .expect("Missing `DISCORD_TOKEN` env var, see README for more information.");
     let intents =
-        serenity::GatewayIntents::non_privileged() | serenity::GatewayIntents::MESSAGE_CONTENT;
+        serenity::GatewayIntents::non_privileged()
+            | serenity::GatewayIntents::MESSAGE_CONTENT
+            | serenity::GatewayIntents::GUILD_MEMBERS
+            | serenity::GatewayIntents::GUILD_PRESENCES;
 
     let client = serenity::ClientBuilder::new(token, intents)
         .framework(framework)

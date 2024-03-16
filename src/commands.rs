@@ -1,3 +1,4 @@
+use std::io::ErrorKind;
 use std::num::{NonZeroU32, NonZeroU8};
 use crate::{Data, elo, emoji};
 use poise::builtins::create_application_commands;
@@ -9,7 +10,8 @@ use num_traits::real::Real;
 use num_traits::Signed;
 use poise::serenity_prelude as serenity;
 use poise::serenity_prelude::{GuildId, Mentionable, UserId};
-use sqlx::{Connection, SqliteConnection};
+use sqlx::{Connection, Executor, Row, SqliteConnection};
+use sqlx::sqlite::SqliteQueryResult;
 
 use crate::error::{ElodonError, ElodonErrorList};
 use crate::filters::*;
@@ -189,6 +191,11 @@ pub async fn scores(
 
     };
 
+    let server_players: Vec<u64> = ctx.guild()
+        .ok_or(ElodonError::NoGuild)?
+        .members.keys()
+        .map(|user_id| user_id.get())
+        .collect();
 
     if exclude_estimates.filter(|exclude_estimates| !exclude_estimates).is_some(){
         if let Some(ref caller) = author_user{
@@ -246,9 +253,13 @@ pub async fn scores(
                 }
             }
         };
+
+        // don't include users not in this server
+        if !server_players.contains(&(user.discord as u64)) {continue}
+
         match detailed{
             true => {
-                let z_value_txt = match elo::get_z_value(play.score, user.elo(level.into()), &chart, 0f32) {
+                let z_value_txt = match elo::get_z_value(play.score, user.elo(level.into()), &chart, 1f32) {
                     Some(z_value) => format!("{:+.1}", z_value),
                     None => "????".to_string()
                 };
@@ -488,8 +499,79 @@ async fn chart_name(conn: &mut SqliteConnection, play: &Play) -> Result<String, 
 }
 
 
-#[poise::command(track_edits,slash_command)]
-pub async fn search(
+#[poise::command(slash_command)]
+pub async fn register(
+    ctx: Context<'_>,
+    donder_id: i64
+) -> Result<(), Error> {
+    let mut conn = get_connection().await?;
+     match sqlx::query("INSERT INTO users (user_id, discord_id, user_name) VALUES (?,?,?);")
+         .bind(donder_id)
+         .bind(ctx.author().id.get() as i64)
+         .bind("temp_name")
+         .execute(&mut conn).await {
+         Ok(_) => {
+             ctx.say("Adding user. data will be retrieved on the next scrape").await?;
+         }
+         Err(err) => {
+             return_err!(
+                 ElodonError::DatabaseError(err)
+             )
+         }
+     }
+    Ok(())
+}
+
+///DEV USE. refreshed slash commands
+
+#[poise::command(slash_command, subcommands("kill", "sql", "register_commands"), owners_only)]
+pub async fn dev(
+    ctx: Context<'_>
+) -> Result<(), Error> { Ok(()) }
+
+
+#[poise::command(slash_command, owners_only)]
+pub async fn kill(
+    ctx: Context<'_>
+) -> Result<(), Error> {
+    return_err!(
+    ElodonError::Shutdown(std::io::Error::new(ErrorKind::Interrupted, "Manual shutdown"))
+    )
+}
+
+#[poise::command(prefix_command, owners_only)]
+pub async fn register_commands(
+    ctx: Context<'_>
+) -> Result<(), Error> {
+    poise::builtins::register_application_commands_buttons(ctx).await?;
+    Ok(())
+}
+#[poise::command(slash_command, subcommands("execute", "fetch"), owners_only)]
+pub async fn sql(
+    ctx: Context<'_>
+) -> Result<(), Error> { Ok(()) }
+#[poise::command(slash_command, owners_only)]
+pub async fn execute(
+    ctx: Context<'_>,
+    execute: String,
+) -> Result<(), Error> {
+    let mut conn = get_connection().await?;
+    match conn.execute(&*execute).await {
+        Ok(response) => {
+            ctx.say(format!("> {execute}\n Modified {} rows", response.rows_affected())).await?;
+        }
+        Err(db_err) => {
+            return_err!(
+                ElodonError::DatabaseError(db_err)
+            )
+        }
+    }
+    Ok(())
+}
+
+
+#[poise::command(track_edits, slash_command, owners_only)]
+pub async fn fetch(
     ctx: Context<'_>,
     #[description= "What to search for"]
     table: FilterType,
@@ -558,22 +640,12 @@ pub async fn search(
 
 
 
-    async fn get_play_info<'a>(conn: &mut SqliteConnection, elo: Option<f32>, play: &'a Play) -> Option<(R32, &'a Play, Genre, String)>{
+async fn get_play_info<'a>(conn: &mut SqliteConnection, elo: Option<f32>, play: &'a Play) -> Option<(R32, &'a Play, Genre, String)>{
     let chart = play.fetch_one_other::<Chart>(conn).await.ok()?;
     let song = play.fetch_one_other::<Song>(conn).await.ok()?;
     let chart_name = chart.full_name(conn).await.ok()?;
-    let genre = song.genre();
-    let z_value = R32::try_new(elo::get_z_value(play.score, elo, &chart, 0f32)?)?;
+    let z_value = R32::try_new(elo::get_z_value(play.score, elo, &chart, 1f32)?)?;
     Some((z_value, &play, song.genre(), chart_name))
-}
-
-///DEV USE. refreshed slash commands
-#[poise::command(prefix_command)]
-pub async fn dev_register(
-    ctx: Context<'_>
-) -> Result<(), Error> {
-    poise::builtins::register_application_commands_buttons(ctx).await?;
-    Ok(())
 }
 
 
